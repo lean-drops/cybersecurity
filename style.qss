@@ -1,0 +1,203 @@
+
+/* Compact, small-screen-friendly Neo-Tokyo theme.
+   Designed to fit well on smaller windows without the UI feeling oversized. */
+
+* { outline: none; }
+
+QMainWindow {
+  background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+    stop:0 #070a14, stop:0.55 #0b1020, stop:1 #120a1c);
+}
+
+QWidget {
+  color: #e6f1ff;
+  font-family: "Segoe UI", "Noto Sans", Arial;
+  font-size: 11px;               /* smaller baseline */
+}
+
+QToolTip {
+  background: rgba(8, 12, 24, 0.95);
+  color: #e6f1ff;
+  border: 1px solid rgba(0, 245, 255, 0.28);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+/* Tabs */
+QTabWidget::pane {
+  border: 1px solid rgba(0, 245, 255, 0.22);
+  background: rgba(10, 16, 36, 0.60);
+  border-radius: 10px;
+  margin: 6px;
+}
+
+QTabBar::tab {
+  background: rgba(15, 23, 48, 0.62);
+  border: 1px solid rgba(0, 245, 255, 0.18);
+  padding: 6px 10px;            /* tighter */
+  margin: 4px 4px 0px 4px;
+  border-top-left-radius: 10px;
+  border-top-right-radius: 10px;
+  min-width: 92px;               /* smaller */
+}
+
+QTabBar::tab:hover {
+  border: 1px solid rgba(0, 245, 255, 0.45);
+  background: rgba(0, 245, 255, 0.08);
+}
+
+QTabBar::tab:selected {
+  background: rgba(255, 43, 214, 0.18);
+  border: 1px solid rgba(255, 43, 214, 0.50);
+}
+
+/* Splitter */
+QSplitter::handle {
+  background: rgba(0, 245, 255, 0.08);
+}
+QSplitter::handle:hover {
+  background: rgba(255, 43, 214, 0.10);
+}
+
+/* Labels */
+QLabel { color: #dbe7ff; }
+
+/* Inputs */
+QLineEdit, QPlainTextEdit, QTextEdit, QListWidget, QComboBox {
+  background: rgba(8, 12, 24, 0.78);
+  border: 1px solid rgba(0, 245, 255, 0.22);
+  border-radius: 10px;
+  padding: 6px 8px;              /* tighter */
+  selection-background-color: rgba(255, 43, 214, 0.55);
+  selection-color: #ffffff;
+}
+
+QLineEdit { min-height: 26px; }  /* smaller line edits */
+
+QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QListWidget:focus, QComboBox:focus {
+  border: 1px solid rgba(0, 245, 255, 0.62);
+}
+
+/* Buttons */
+QPushButton, QToolButton {
+  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+    stop:0 rgba(0, 245, 255, 0.13),
+    stop:0.5 rgba(255, 43, 214, 0.15),
+    stop:1 rgba(0, 255, 156, 0.13));
+  border: 1px solid rgba(0, 245, 255, 0.28);
+  border-radius: 10px;
+  padding: 6px 10px;             /* tighter */
+  min-height: 28px;              /* smaller */
+}
+
+QPushButton:hover, QToolButton:hover {
+  border: 1px solid rgba(255, 43, 214, 0.60);
+  background: rgba(255, 43, 214, 0.18);
+}
+
+QPushButton:pressed, QToolButton:pressed {
+  border: 1px solid rgba(0, 255, 156, 0.65);
+  background: rgba(0, 255, 156, 0.16);
+}
+
+QPushButton:disabled, QToolButton:disabled {
+  color: rgba(230, 241, 255, 0.45);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ComboBox popup */
+QComboBox::drop-down { border: 0px; width: 22px; }
+QComboBox QAbstractItemView {
+  background: rgba(8, 12, 24, 0.96);
+  border: 1px solid rgba(0, 245, 255, 0.28);
+  selection-background-color: rgba(255, 43, 214, 0.55);
+  border-radius: 10px;
+  padding: 4px;
+}
+
+/* List */
+QListWidget::item {
+  padding: 6px 8px;
+  margin: 3px 4px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+QListWidget::item:hover {
+  background: rgba(0, 245, 255, 0.08);
+  border: 1px solid rgba(0, 245, 255, 0.18);
+}
+QListWidget::item:selected {
+  background: rgba(0, 245, 255, 0.16);
+  border: 1px solid rgba(0, 245, 255, 0.50);
+}
+
+/* Menubar / menus (compact) */
+QMenuBar {
+  background: rgba(8, 12, 24, 0.60);
+  border-bottom: 1px solid rgba(0, 245, 255, 0.12);
+  padding: 3px 6px;
+}
+QMenuBar::item {
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+QMenuBar::item:selected {
+  background: rgba(0, 245, 255, 0.08);
+}
+QMenu {
+  background: rgba(8, 12, 24, 0.96);
+  border: 1px solid rgba(0, 245, 255, 0.20);
+  border-radius: 10px;
+  padding: 6px;
+}
+QMenu::item {
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+QMenu::item:selected {
+  background: rgba(255, 43, 214, 0.18);
+}
+
+/* Status bar */
+QStatusBar {
+  background: rgba(8, 12, 24, 0.62);
+  border-top: 1px solid rgba(0, 245, 255, 0.14);
+  padding: 4px 6px;
+}
+
+/* Scrollbars (slimmer) */
+QScrollBar:vertical {
+  background: rgba(8, 12, 24, 0.0);
+  width: 10px;
+  margin: 6px 4px 6px 4px;
+}
+QScrollBar::handle:vertical {
+  background: rgba(0, 245, 255, 0.18);
+  border-radius: 5px;
+  min-height: 26px;
+}
+QScrollBar::handle:vertical:hover {
+  background: rgba(255, 43, 214, 0.22);
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+  height: 0px;
+}
+
+QScrollBar:horizontal {
+  background: rgba(8, 12, 24, 0.0);
+  height: 10px;
+  margin: 4px 6px 4px 6px;
+}
+QScrollBar::handle:horizontal {
+  background: rgba(0, 245, 255, 0.18);
+  border-radius: 5px;
+  min-width: 26px;
+}
+QScrollBar::handle:horizontal:hover {
+  background: rgba(255, 43, 214, 0.22);
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+  width: 0px;
+}

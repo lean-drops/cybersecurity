@@ -1,0 +1,174 @@
+term;definition
+Attack;An action that attempts to violate a security property (e.g., steal, change, forge, or disrupt).
+Mechanism;A concrete technical method used to provide a security service (e.g., HMAC, AEAD, rate limiting).
+Service;A desired protection outcome (e.g., confidentiality, integrity, authentication, access control, availability).
+Interruption;Attack class that prevents or degrades availability (e.g., DoS).
+Interception;Attack class that reads data without authorization (e.g., eavesdropping).
+Modification;Attack class that alters data or messages (tampering).
+Fabrication;Attack class that creates forged data or messages (spoofing/injection).
+Confidentiality;Only authorized parties can read the information.
+Integrity;Unauthorized changes to data are prevented or detectable.
+Authentication;Verifying the identity of a party (who you are talking to).
+Authorization;Determining what an authenticated party is allowed to do.
+Access Control;Mechanisms that enforce authorization (policies + enforcement).
+Availability;System remains usable in time despite faults/attacks.
+Kerckhoffs Principle;Assume the algorithm is public; only keys/secrets must be kept secret.
+Threat Model;Structured analysis of what to protect, from whom, and how (assets, adversaries, impact, mitigations).
+Asset;Something valuable that needs protection (data, accounts, keys, uptime).
+Adversary;Attacker model: capabilities, goals, access level.
+Impact;Damage if an attack succeeds (loss, outage, fraud, reputational harm).
+Mitigation;A control that reduces risk (prevention, detection, response).
+Symmetric Cryptography;Cryptography where the same secret key is shared for encrypt/decrypt.
+Block Cipher;Cipher that encrypts fixed-size blocks (e.g., AES).
+AES;Widely used symmetric block cipher (128-bit block size).
+Mode of Operation;How a block cipher is used to encrypt longer messages (ECB, CTR, OFB, etc.).
+ECB;Insecure mode: identical plaintext blocks produce identical ciphertext blocks (pattern leakage).
+CTR;Stream-like mode using counters; requires a unique nonce per key.
+OFB;Stream-like mode; requires unique IV/nonce per key.
+Nonce;Public value that must be unique (number used once) for a given key and scheme.
+IV;Initialization vector; public start value whose uniqueness/randomness requirements depend on the mode.
+Nonce Uniqueness;Requirement that a nonce/IV not repeat under the same key (critical for CTR/OFB).
+Nonce Reuse;Reusing a nonce/IV in stream-like modes breaks security (can leak relationships between plaintexts).
+Encryption Without Integrity;Confidentiality alone does not prevent attacker-controlled ciphertext modification.
+Malleability;Property where ciphertext changes cause predictable plaintext changes if not authenticated.
+AEAD;Authenticated Encryption with Associated Data: provides confidentiality + integrity/authenticity.
+Associated Data;Metadata that is authenticated but not encrypted (concept used with AEAD).
+Token;Opaque value representing authorization/session/action; should be unpredictable or cryptographically protected.
+128-bit Randomness;Rule of thumb: tokens should have at least 128 bits of entropy to resist guessing.
+Hash Function;Deterministic function mapping data to fixed-size digest; unkeyed.
+Hash Properties;Security-relevant properties (preimage, second-preimage, collision resistance).
+Birthday Effect;Collision probability grows with about sqrt(N) samples (birthday paradox).
+Birthday Bound;Collision search cost is about 2^(n/2) for an n-bit hash output.
+MD5;Broken hash (collisions); not suitable for security.
+SHA-1;Broken hash (collisions); not suitable for security.
+MAC;Message Authentication Code: keyed integrity + authenticity with a shared secret.
+HMAC;Standard MAC built from a hash function; designed to resist length-extension issues.
+Keyed Authenticity;Only someone with the key can produce a valid authenticator (MAC).
+Length-Extension Attack;Attack on naive constructions like H(K||m) for Merkle-Damgard hashes.
+Constant-Time Compare;Comparison that avoids timing leaks (important for MACs/tokens).
+Password Hashing;Storing passwords using salt + slow KDF (never plain hash).
+Salt;Per-password random value that prevents precomputed attacks and separates equal passwords.
+Slow KDF;Password hashing designed to be expensive (time/memory) to slow brute force.
+KDF;Key Derivation Function; for passwords, use memory-hard/slow KDFs.
+Argon2id;Modern recommended password hashing KDF (memory-hard).
+scrypt;Password hashing KDF (memory-hard).
+bcrypt;Password hashing KDF (cost factor based).
+Signed Link;Link/action token protected against tampering using a MAC over structured fields.
+HMAC(ctx|exp|nonce|payload);Pattern: sign context + expiry + nonce + payload to bind meaning and prevent tamper/replay.
+Context (ctx);Field that binds a token to a specific purpose to prevent cross-use.
+Expiration (exp);Time limit for a token/link; reduces replay window.
+Payload;The signed content (e.g., user id, action id) that must not be modifiable.
+Public-Key Cryptography;Uses a public/private keypair for encryption or signatures.
+Diffie-Hellman (DH);Key agreement protocol; without authentication it is vulnerable to MITM.
+MITM;Man-in-the-middle: attacker intercepts and can alter communications while impersonating each side.
+RSA;Public-key algorithm; must be used via standardized padding/encodings, not raw textbook form.
+Digital Signature;Provides integrity + origin authentication using private-key signing and public verification.
+Standards-Based Crypto;Use vetted schemes/protocols (e.g., TLS, RSA-OAEP, RSA-PSS), not ad-hoc designs.
+Textbook RSA;Raw RSA without padding; deterministic and insecure.
+OAEP;Padding scheme for RSA encryption to achieve semantic security.
+PSS;Padding scheme for RSA signatures to provide strong security properties.
+PKI;Public Key Infrastructure: certificates + trust chain used to authenticate public keys.
+Certificate;Signed binding between identity (name) and a public key.
+Chain of Trust;Verification path from end-entity cert to intermediate(s) to trusted root.
+Validity;Certificate time window (notBefore/notAfter); must be current.
+Name Match;Certificate identity must match the hostname/service identity used.
+Revocation;Invalidating a certificate before expiration (key compromise, policy).
+CRL;Certificate Revocation List: published list of revoked certificates.
+OCSP;Online protocol to check certificate revocation status.
+Timeliness Window;Delay/uncertainty in revocation propagation (practical limitation).
+TLS;Protocol providing encrypted + authenticated transport (usually via PKI certificates).
+HSTS;HTTP Strict Transport Security: forces HTTPS after a host is known to be HTTPS.
+Canonical Host;Single official hostname enforced to reduce confusion/security bugs (cookies, redirects, origin).
+Webhook;Inbound HTTP callback from another system; must be authenticated and replay-protected.
+Webhook HMAC;Shared-secret signature over request data to authenticate sender and ensure integrity.
+Ed25519;Modern signature algorithm; can be used to verify signed webhooks/events.
+Auth Protocol Freshness;Ensuring messages are new (not replayed) using nonce/sequence/timestamp.
+Freshness;Property that prevents reuse of old valid messages.
+Sequence Number (Seq);Monotonic counter per sender/channel used to detect replays/out-of-order.
+Timestamp (TS);Time-based freshness control with an acceptance window.
+Replay Attack;Re-sending a previously valid message to repeat an action.
+Reflection Attack;Reusing protocol messages in reverse direction; mitigated by direction/context tagging.
+Direction Tag;Explicit field binding a message to client->server or server->client direction.
+Nonce Store;Server-side storage of seen nonces/ids to detect and reject replays.
+Anti-Replay (ts+nonce+HMAC);Common pattern: sign timestamp + nonce + body, and store nonce to reject replays.
+MFA;Multi-Factor Authentication: combines factors (knowledge/possession/inherence).
+MFA Tradeoffs;Improves account security but has usability, recovery, and phishing-resistance considerations.
+Phishing;Tricking users into giving credentials or approving access.
+Keylogging;Malware capturing user input; can defeat password entry and some MFA flows.
+System Security;Security of the platform and runtime environment beyond app code.
+Secure Boot;Verify-before-execute startup chain ensuring only trusted code boots.
+Verify-Before-Execute;Principle: verify integrity/signature prior to running code.
+Rollback;Downgrade to an older (possibly vulnerable) but still signed version.
+Anti-Rollback;Mechanisms preventing old versions from running (monotonic counters/high-water marks).
+Monotonic Counter;Counter that only increases; used to prevent accepting older versions/states.
+High-Water Mark;Stored highest accepted version/build number; blocks lower versions.
+TPM;Trusted Platform Module: hardware-backed keys, measurements, sealing, attestation.
+PCR;Platform Configuration Register: stores boot measurements in a hash-chained way.
+PCR Extend;Update rule PCR := H(PCR || input); creates append-only measurement chain.
+Sealing;TPM feature: data/keys usable only when PCR/state matches expected measurements.
+Attestation;Signed report of platform state (often including a nonce for freshness).
+Keys Never Leave TPM;Concept: private keys are generated/stored inside TPM and used internally.
+TEE;Trusted Execution Environment: isolated execution for small trusted components.
+TrustZone;ARM TEE technology separating secure/non-secure worlds.
+SGX;Intel enclave technology providing isolated execution (TEE-like).
+API Boundary;Clearly defined interface between trusted and untrusted components; keep trusted side minimal.
+Runtime Isolation;Using OS/process boundaries to limit blast radius of compromised components.
+OS Isolation;Separation via users, processes, sandboxes, containers, namespaces, etc.
+Least Privilege;Give each component the minimum rights needed to function.
+File Permissions;OS-level controls restricting read/write/execute access to files/directories.
+Verified Startup;Process verifying a manifest + signatures before enabling full functionality.
+Manifest;List of expected files/hashes/versions used for integrity checking at startup.
+Signature Verification;Cryptographic check that a manifest/artifact was signed by a trusted key.
+Minimal Signer Process;Keep signing/integrity-critical code small and well-isolated to reduce TCB.
+TCB;Trusted Computing Base: all components that must be trusted for security; should be minimized.
+Software Security;Security of code and dependencies (bugs, misuse, exploitation).
+Memory Bugs;Implementation flaws (e.g., overflows) enabling crashes or code execution (conceptual).
+ROP;Return-Oriented Programming: chaining gadgets to execute without injecting new code.
+Mitigations;System/compiler protections reducing exploitability (W^X, ASLR, canaries, CFI).
+W^X;Write XOR Execute: memory cannot be both writable and executable.
+ASLR;Address Space Layout Randomization: randomizes memory layout to hinder exploitation.
+Canaries;Stack canaries detect stack smashing before control-flow hijack.
+CFI;Control-Flow Integrity restricts illegal control-flow transfers.
+Weakest Link;Overall security is limited by the weakest component (e.g., uploads, parsers, config).
+Uploads;High-risk feature area: parsing, decompression bombs, resource exhaustion.
+Native Tools;External binaries/parsers increase attack surface; isolate tightly.
+Cookie Theft;Stealing session cookies via malware, XSS, or misconfigurations.
+Crypto Does Not Fix Everything;Correct crypto cannot compensate for insecure endpoints, parsing, or configuration.
+Privacy;Minimizing personal data exposure and inference risks.
+Re-identification;Inferring identities from seemingly anonymous datasets by linking/correlation.
+Traffic Analysis;Learning information from metadata (timing, size, frequency) even if content is encrypted.
+Logs/Exports Minimization;Collect only necessary data; avoid sensitive payloads and long retention.
+Logging Retention TTL;Automatic deletion/expiry of logs after a defined time window.
+PII;Personally Identifiable Information: data that can identify a person (directly or indirectly).
+Media Worker;Separate process/service that handles risky file parsing/transcoding work.
+Worker Isolation;Run worker with strict sandboxing, minimal privileges, and constrained resources.
+Resource Limits;Caps on CPU, memory, file size, and runtime to prevent DoS.
+No Network (Worker);Worker has no outbound network to prevent exfiltration/SSRF and reduce attack surface.
+Timeout;Maximum allowed processing time; abort if exceeded.
+Kill;Force-terminate a worker/job that exceeds limits or misbehaves.
+Session;State linking a client to an authenticated identity/permissions.
+Session Rotation;Issue a new session identifier after login or privilege/scope changes.
+Session TTL;Expiration time for sessions to limit exposure if stolen.
+Scope Change;Change in permissions/roles; should trigger session rotation and re-authorization.
+SECRET_KEY;Server secret used for signing (e.g., sessions); must be set securely in production.
+Fail-Fast (Prod);Abort startup if critical security configuration is missing/misconfigured.
+Dev Warning;In development, warn loudly for unsafe config but allow local iteration (concept).
+Rate Limiting;Restrict request rate per IP/account to slow brute force and abuse.
+Backoff;Progressive delay or throttling after failures to reduce attack speed.
+Login Burst;Many rapid login attempts; should trigger rate limits/backoff.
+HTTP 429;Too Many Requests: standard response for rate limiting.
+Tamper;Modify parameters/ciphertext/token to test integrity controls.
+HTTPS Redirect;Automatically redirect HTTP to HTTPS to prevent plaintext transport.
+Cookie Flags;Cookie attributes that reduce risk (Secure, HttpOnly, SameSite).
+Secure Cookie Flag;Cookie sent only over HTTPS.
+HttpOnly Cookie Flag;Cookie inaccessible to JavaScript; reduces cookie theft via XSS.
+SameSite Cookie Flag;Restricts cross-site cookie sending; reduces CSRF risk.
+CSRF;Cross-Site Request Forgery: tricking a logged-in browser into performing actions.
+CSRF Token;Per-session/per-request secret token checked server-side to validate intent.
+HTTP 303;See Other: common redirect after POST to prevent form resubmission (pattern seen in tests).
+Non-repudiation;Property of signatures: signer cannot plausibly deny signing (unlike MAC shared-secret).
+Degraded Mode;Fallback behavior when integrity checks fail (e.g., abort or limited safe mode).
+Deployment Downgrade;Operational rollback to older release; must be blocked if it violates security baseline.
+Anti-Rollback Test (v10 ok, v9 blocked);Practical verification that monotonic/high-water blocks older versions.
+Large Uploads;Abuse case for resource exhaustion; must be handled via limits/worker isolation.
+Bad Input;Malformed or adversarial input that targets parsers; must fail safely without crashing the app.

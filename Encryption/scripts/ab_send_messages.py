@@ -18,7 +18,39 @@ ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
 def project_root() -> Path:
-    return Path(__file__).resolve().parents[1]
+    hard = Path("/Users/python/Pycharm Projects/Cybersecurity/Encryption")
+    if hard.exists():
+        return hard
+
+    here = Path(__file__).resolve()
+    candidates = [here.parent, here.parent.parent]
+    if len(here.parents) >= 3:
+        candidates.append(here.parents[2])
+
+    for cand in candidates:
+        if (cand / "encryption_methods").exists() or (cand / "decryption_methods").exists() or (cand / "encrypt").exists() or (cand / "decrypt").exists():
+            return cand
+
+    return here.parent.parent
+
+
+def _find_dir(root: Path, names: List[str], create_name: str) -> Path:
+    for n in names:
+        p = root / n
+        if p.exists() and p.is_dir():
+            return p
+    p = root / create_name
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def encryption_plugin_dir() -> Path:
+    root = project_root()
+    return _find_dir(root, ["encryption_methods", "encrypt", "encryption"], "encryption_methods")
+
+
+def styles_qss_path() -> Path:
+    return Path("style.qss")
 
 
 def data_dir() -> Path:
@@ -33,10 +65,6 @@ def channel_jsonl_path() -> Path:
 
 def channel_sqlite_path() -> Path:
     return data_dir() / "ab_channel.db"
-
-
-def styles_qss_path() -> Path:
-    return project_root() / "styles" / "style.qss"
 
 
 def ensure_sqlite_schema(db_path: Path) -> None:
@@ -167,6 +195,7 @@ def make_msg_id() -> str:
     return f"msg-{int(time.time() * 1000)}-{random.randint(1000, 9999)}"
 
 
+# scripts/ab_send_messages.py
 def tcp_send_json_line(
     host: str,
     dest_port: int,
@@ -174,24 +203,95 @@ def tcp_send_json_line(
     obj: Dict[str, Any],
     timeout_s: float = 4.0,
 ) -> Tuple[bool, str]:
+    """
+    Send one JSON line over TCP.
+
+    Fix for macOS Errno 48 (Address already in use) when reusing a fixed source_port:
+    - Reuse a persistent TCP connection per (host, dest_port, source_port) instead of reconnecting each send.
+    - Enable SO_REUSEADDR (and best-effort SO_REUSEPORT) before bind.
+    - If the user changes destination while keeping the same source_port, close any previous pooled socket
+      using that source_port so a new connection can be created.
+    """
     data = (json.dumps(obj, ensure_ascii=True) + "\n").encode("utf-8")
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(timeout_s)
-    try:
-        if source_port > 0:
-            s.bind(("0.0.0.0", int(source_port)))
-        s.connect((host, int(dest_port)))
-        s.sendall(data)
-        return True, "sent"
-    except Exception as e:
-        return False, f"send failed: {e}"
-    finally:
+    dest_port_i = int(dest_port)
+    source_port_i = int(source_port)
+
+    # Lazy-init function-static pool + lock (no globals needed)
+    if not hasattr(tcp_send_json_line, "_pool"):
+        tcp_send_json_line._pool = {}  # type: ignore[attr-defined]
+    if not hasattr(tcp_send_json_line, "_lock"):
+        tcp_send_json_line._lock = threading.Lock()  # type: ignore[attr-defined]
+
+    pool = tcp_send_json_line._pool  # type: ignore[attr-defined]
+    lock = tcp_send_json_line._lock  # type: ignore[attr-defined]
+
+    key = (str(host), dest_port_i, source_port_i)
+
+    # 1) Try reuse existing connection
+    with lock:
+        s = pool.get(key)
+
+    if s is not None:
         try:
-            s.close()
+            s.settimeout(timeout_s)
+            s.sendall(data)
+            return True, "sent(reuse)"
+        except Exception:
+            try:
+                s.close()
+            except Exception:
+                pass
+            with lock:
+                if pool.get(key) is s:
+                    pool.pop(key, None)
+
+    # 2) If we are using a fixed source port and destination changed, we cannot keep another socket
+    #    bound to the same source port. Close any pooled sockets that use this source port.
+    if source_port_i > 0:
+        to_close = []
+        with lock:
+            for k, sock in list(pool.items()):
+                if k != key and k[2] == source_port_i:
+                    to_close.append((k, sock))
+            for k, _sock in to_close:
+                pool.pop(k, None)
+        for _k, sock in to_close:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    # 3) Create a new connection and keep it open for future sends
+    s2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s2.settimeout(timeout_s)
+        try:
+            s2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         except Exception:
             pass
+        # Best-effort on platforms that support it
+        if hasattr(socket, "SO_REUSEPORT"):
+            try:
+                s2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except Exception:
+                pass
 
+        if source_port_i > 0:
+            s2.bind(("0.0.0.0", source_port_i))
 
+        s2.connect((host, dest_port_i))
+        s2.sendall(data)
+
+        with lock:
+            pool[key] = s2
+
+        return True, "sent(new)"
+    except Exception as e:
+        try:
+            s2.close()
+        except Exception:
+            pass
+        return False, f"send failed: {e}"
 class TcpJsonLineServer:
     def __init__(
         self,
@@ -324,9 +424,7 @@ def load_encrypt_plugins() -> Dict[str, Plugin]:
         encrypt_fn=identity_encrypt,
     )
 
-    plug_dir = project_root() / "encryption_methods"
-    plug_dir.mkdir(parents=True, exist_ok=True)
-
+    plug_dir = encryption_plugin_dir()
     for p in sorted(plug_dir.glob("*.py")):
         if p.name.startswith("_"):
             continue
@@ -401,7 +499,7 @@ def run_gui_pyside() -> None:
 
             title = QLabel("HarborLink")
             title.setObjectName("AppTitle")
-            subtitle = QLabel("A -> B TCP channel + encryption plugins")
+            subtitle = QLabel("A -> B TCP channel + plugins")
             subtitle.setObjectName("AppSubtitle")
 
             tcol = QVBoxLayout()
@@ -413,7 +511,7 @@ def run_gui_pyside() -> None:
             self.status_pill = QLabel("B server: stopped")
             self.status_pill.setObjectName("StatusPillBad")
             self.status_pill.setAlignment(Qt.AlignCenter)
-            self.status_pill.setMinimumWidth(160)
+            self.status_pill.setMinimumWidth(180)
             h.addWidget(self.status_pill)
 
             root.addWidget(header)
@@ -424,7 +522,6 @@ def run_gui_pyside() -> None:
             left = QVBoxLayout()
             left.setSpacing(12)
 
-            # Connection card
             conn = Card("Channel settings")
             grid = QGridLayout()
             grid.setHorizontalSpacing(10)
@@ -456,9 +553,15 @@ def run_gui_pyside() -> None:
 
             conn.body.addLayout(grid)
             conn.body.addLayout(btn_row)
+
+            plug_hint = QLabel(
+                f"Plugin dir: {str(encryption_plugin_dir())}"
+            )
+            plug_hint.setObjectName("Hint")
+            conn.body.addWidget(plug_hint)
+
             left.addWidget(conn)
 
-            # Compose card
             compose = Card("Compose from A")
             self.method_sel = QComboBox()
             self.method_sel.setObjectName("Input")
@@ -510,14 +613,13 @@ def run_gui_pyside() -> None:
 
             mid.addLayout(left, 2)
 
-            # Right side: Inbox + details + log
             right = QVBoxLayout()
             right.setSpacing(12)
 
             inbox = Card("Inbox at B (received)")
             self.inbox_list = QListWidget()
             self.inbox_list.setObjectName("List")
-            self.inbox_list.setMinimumWidth(380)
+            self.inbox_list.setMinimumWidth(420)
             inbox.body.addWidget(self.inbox_list)
             right.addWidget(inbox, 2)
 
@@ -539,10 +641,8 @@ def run_gui_pyside() -> None:
             mid.addLayout(right, 3)
             root.addLayout(mid, 1)
 
-            # Dynamic config widgets
             self.cfg_widgets: Dict[str, Tuple[str, Any]] = {}
 
-            # Hooks
             self.method_sel.currentIndexChanged.connect(self._rebuild_cfg)
             self.start_btn.clicked.connect(self._start_server)
             self.stop_btn.clicked.connect(self._stop_server)
@@ -556,6 +656,9 @@ def run_gui_pyside() -> None:
             self.timer = QTimer(self)
             self.timer.timeout.connect(self._poll_q)
             self.timer.start(100)
+
+            self._log(f"Using project root: {str(project_root())}")
+            self._log(f"Using encryption plugin dir: {str(encryption_plugin_dir())}")
 
         def _toggle_debug(self, on: bool) -> None:
             self.include_debug_btn.setText("Include debug_plaintext: ON" if on else "Include debug_plaintext: OFF")
@@ -584,9 +687,8 @@ def run_gui_pyside() -> None:
                     txt = str(payload).lower()
                     if "starting" in txt:
                         self._set_status(True)
-                    if "stopped" in txt or "error" in txt:
-                        if "stopped" in txt:
-                            self._set_status(False)
+                    if "stopped" in txt:
+                        self._set_status(False)
                 elif kind == "msg":
                     obj, addr = payload
                     try:
@@ -744,7 +846,6 @@ def run_gui_pyside() -> None:
     app = QApplication([])
     app.setApplicationName("HarborLink")
 
-    # Font a bit softer
     f = QFont()
     f.setPointSize(10)
     app.setFont(f)
@@ -763,13 +864,7 @@ def run_gui_pyside() -> None:
 
 
 def main() -> None:
-    # PySide6 is required for the requested look. If missing, raise a clear error.
-    try:
-        run_gui_pyside()
-    except Exception as e:
-        print("ERROR: PySide6 GUI could not start.")
-        print(f"Reason: {e}")
-        print("Install PySide6 or adjust the script to use a Tk fallback.")
+    run_gui_pyside()
 
 
 if __name__ == "__main__":

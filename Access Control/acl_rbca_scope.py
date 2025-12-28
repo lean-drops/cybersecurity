@@ -1,8 +1,42 @@
-# acl_rbac_scopes_demo.py
-import tkinter as tk
-from tkinter import ttk
+# pyside_policy_simulator.py
+import os
+import sys
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Set, Tuple
+
+try:
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QFont
+    from PySide6.QtWidgets import (
+        QApplication,
+        QComboBox,
+        QFormLayout,
+        QGroupBox,
+        QHBoxLayout,
+        QLabel,
+        QLineEdit,
+        QListWidget,
+        QListWidgetItem,
+        QMainWindow,
+        QMessageBox,
+        QPushButton,
+        QPlainTextEdit,
+        QSplitter,
+        QTabWidget,
+        QTableWidget,
+        QTableWidgetItem,
+        QTextEdit,
+        QTreeWidget,
+        QTreeWidgetItem,
+        QVBoxLayout,
+        QWidget,
+    )
+except Exception as e:
+    raise SystemExit(
+        "PySide6 is required to run this program.\n"
+        "Install: pip install PySide6\n"
+        f"Import error: {e}"
+    )
 
 
 # ----------------------------
@@ -11,8 +45,8 @@ from typing import Dict, List, Optional, Set, Tuple
 
 @dataclass(frozen=True)
 class Permission:
-    action: str                 # e.g. "read", "write", "delete", "*"
-    resource: str               # e.g. "doc:public", "doc:*", "*"
+    action: str
+    resource: str
 
 
 @dataclass
@@ -29,31 +63,29 @@ class User:
 
 @dataclass(frozen=True)
 class AclEntry:
-    effect: str                 # "allow" or "deny"
-    subject_type: str           # "user" or "role"
-    subject_id: str             # user_id or role_id
-    action: str                 # action or "*"
-    resource: str               # resource or patterns like "doc:*"
+    effect: str        # "allow" or "deny"
+    subject_type: str  # "user" or "role"
+    subject_id: str
+    action: str
+    resource: str
 
 
 @dataclass
 class Endpoint:
-    endpoint_id: str            # label/id
-    method: str                 # GET/POST/DELETE
-    path: str                   # /docs/public
-    action: str                 # "read"/"write"/"delete"
-    resource: str               # "doc:public"
-    required_scopes: Set[str]   # e.g. {"docs:read"}
+    endpoint_id: str
+    method: str
+    path: str
+    action: str
+    resource: str
+    required_scopes: Set[str]
+    description: str = ""
 
 
 # ----------------------------
 # Policy engine
 # ----------------------------
 
-def _match_pattern(value: str, pattern: str) -> bool:
-    # Very small matcher: exact or prefix-star. Examples:
-    # pattern "*" matches everything
-    # pattern "doc:*" matches "doc:public" etc
+def match_pattern(value: str, pattern: str) -> bool:
     if pattern == "*":
         return True
     if pattern.endswith("*"):
@@ -61,12 +93,12 @@ def _match_pattern(value: str, pattern: str) -> bool:
     return value == pattern
 
 
-def _permission_matches(perm: Permission, action: str, resource: str) -> bool:
-    return _match_pattern(action, perm.action) and _match_pattern(resource, perm.resource)
+def permission_matches(perm: Permission, action: str, resource: str) -> bool:
+    return match_pattern(action, perm.action) and match_pattern(resource, perm.resource)
 
 
-def _acl_matches(entry: AclEntry, user: User, user_roles: Set[str], action: str, resource: str) -> bool:
-    if not (_match_pattern(action, entry.action) and _match_pattern(resource, entry.resource)):
+def acl_matches(entry: AclEntry, user: User, user_roles: Set[str], action: str, resource: str) -> bool:
+    if not (match_pattern(action, entry.action) and match_pattern(resource, entry.resource)):
         return False
     if entry.subject_type == "user":
         return entry.subject_id == user.user_id
@@ -75,25 +107,40 @@ def _acl_matches(entry: AclEntry, user: User, user_roles: Set[str], action: str,
     return False
 
 
+Step = Tuple[str, str, List[str]]  # (title, status, lines)
+
+
 def evaluate_access(
     user: User,
     roles_by_id: Dict[str, Role],
-    acl_by_resource: Dict[str, List[AclEntry]],
+    acl_by_resource_pattern: Dict[str, List[AclEntry]],
     endpoint: Endpoint,
     token_scopes: Set[str],
-) -> Tuple[bool, List[str]]:
-    reasons: List[str] = []
+) -> Tuple[bool, List[Step]]:
+    steps: List[Step] = []
 
-    # 1) Scopes gate (token must include all required scopes)
-    missing_scopes = sorted(list(endpoint.required_scopes - token_scopes))
-    if missing_scopes:
-        reasons.append("DENY: Missing required scopes: " + ", ".join(missing_scopes))
-        reasons.append("Required scopes: " + ", ".join(sorted(endpoint.required_scopes)) if endpoint.required_scopes else "Required scopes: (none)")
-        reasons.append("Token scopes: " + ", ".join(sorted(token_scopes)) if token_scopes else "Token scopes: (none)")
-        return (False, reasons)
-    reasons.append("OK: Scopes satisfied: " + (", ".join(sorted(endpoint.required_scopes)) if endpoint.required_scopes else "(none)"))
+    missing = sorted(list(endpoint.required_scopes - token_scopes))
+    if missing:
+        steps.append((
+            "Step 1: Scopes (token gate)",
+            "DENY",
+            [
+                "Missing required scopes: " + ", ".join(missing),
+                "Required scopes: " + (", ".join(sorted(endpoint.required_scopes)) if endpoint.required_scopes else "(none)"),
+                "Token scopes: " + (", ".join(sorted(token_scopes)) if token_scopes else "(none)"),
+            ],
+        ))
+        steps.append(("Final", "DENY", ["Reason: token does not have the required scopes."]))
+        return (False, steps)
 
-    # 2) RBAC check (any role permission matches)
+    steps.append((
+        "Step 1: Scopes (token gate)",
+        "OK",
+        [
+            "Required scopes satisfied: " + (", ".join(sorted(endpoint.required_scopes)) if endpoint.required_scopes else "(none)"),
+        ],
+    ))
+
     user_roles = set(user.roles)
     rbac_hits: List[str] = []
     for rid in sorted(user_roles):
@@ -101,52 +148,49 @@ def evaluate_access(
         if not role:
             continue
         for perm in role.permissions:
-            if _permission_matches(perm, endpoint.action, endpoint.resource):
-                rbac_hits.append(f"RBAC allow via role '{rid}': ({perm.action}, {perm.resource})")
-    rbac_allowed = len(rbac_hits) > 0
-    if rbac_allowed:
-        reasons.extend(rbac_hits)
-    else:
-        reasons.append("RBAC: no matching permission for action/resource")
+            if permission_matches(perm, endpoint.action, endpoint.resource):
+                rbac_hits.append(f"Allow via role '{rid}': ({perm.action}, {perm.resource})")
 
-    # 3) ACL overrides (deny overrides everything; allow can grant even if RBAC denied)
-    # We apply ACL entries associated with this exact resource and also wildcard "resource groups"
-    # For demo: we store ACL keyed by resource exact and by prefix patterns like "doc:*"
+    rbac_ok = len(rbac_hits) > 0
+    steps.append((
+        "Step 2: RBAC (roles -> permissions)",
+        "OK" if rbac_ok else "NO MATCH",
+        rbac_hits if rbac_hits else ["No role permission matched (action, resource)."],
+    ))
+
     acl_candidates: List[AclEntry] = []
-    for key, entries in acl_by_resource.items():
-        if _match_pattern(endpoint.resource, key):
+    for pattern_key, entries in acl_by_resource_pattern.items():
+        if match_pattern(endpoint.resource, pattern_key):
             acl_candidates.extend(entries)
 
-    acl_deny_hits: List[str] = []
-    acl_allow_hits: List[str] = []
+    deny_hits: List[str] = []
+    allow_hits: List[str] = []
     for entry in acl_candidates:
-        if _acl_matches(entry, user, user_roles, endpoint.action, endpoint.resource):
+        if acl_matches(entry, user, user_roles, endpoint.action, endpoint.resource):
+            line = f"{entry.effect.upper()} match: {entry.subject_type}:{entry.subject_id} ({entry.action}, {entry.resource})"
             if entry.effect == "deny":
-                acl_deny_hits.append(
-                    f"ACL deny match: {entry.subject_type}:{entry.subject_id} ({entry.action}, {entry.resource})"
-                )
-            elif entry.effect == "allow":
-                acl_allow_hits.append(
-                    f"ACL allow match: {entry.subject_type}:{entry.subject_id} ({entry.action}, {entry.resource})"
-                )
+                deny_hits.append(line)
+            else:
+                allow_hits.append(line)
 
-    if acl_deny_hits:
-        reasons.extend(acl_deny_hits)
-        reasons.append("DENY: ACL deny overrides")
-        return (False, reasons)
+    if deny_hits:
+        steps.append(("Step 3: ACL (object exceptions)", "DENY OVERRIDE", deny_hits))
+        steps.append(("Final", "DENY", ["Reason: ACL deny overrides everything."]))
+        return (False, steps)
 
-    if acl_allow_hits:
-        reasons.extend(acl_allow_hits)
-        reasons.append("ALLOW: ACL allows (and no ACL deny matched)")
-        return (True, reasons)
+    if allow_hits:
+        steps.append(("Step 3: ACL (object exceptions)", "ALLOW OVERRIDE", allow_hits))
+        steps.append(("Final", "ALLOW", ["Reason: ACL allow grants access (no deny matched)."]))
+        return (True, steps)
 
-    # If no ACL allow/deny matched, fall back to RBAC
-    if rbac_allowed:
-        reasons.append("ALLOW: RBAC allowed (no ACL override)")
-        return (True, reasons)
+    steps.append(("Step 3: ACL (object exceptions)", "NO MATCH", ["No ACL entry matched."]))
 
-    reasons.append("DENY: Neither RBAC nor ACL allowed")
-    return (False, reasons)
+    if rbac_ok:
+        steps.append(("Final", "ALLOW", ["Reason: RBAC allowed and ACL did not override."]))
+        return (True, steps)
+
+    steps.append(("Final", "DENY", ["Reason: neither RBAC nor ACL allowed."]))
+    return (False, steps)
 
 
 # ----------------------------
@@ -174,395 +218,824 @@ def build_demo_data() -> Tuple[Dict[str, User], Dict[str, Role], Dict[str, List[
         "dave": User("dave", {"admin"}),
     }
 
-    # ACL store: key is a resource pattern (exact or "doc:*")
-    acl_by_resource: Dict[str, List[AclEntry]] = {
+    acl_by_resource_pattern: Dict[str, List[AclEntry]] = {
         "doc:public": [
-            # Example: deny Bob from deleting public docs (even if his role allowed delete - it doesn't, but demo)
             AclEntry("deny", "user", "bob", "delete", "doc:public"),
         ],
         "doc:secret": [
-            # Example: only admin can read secret docs by default (RBAC viewer/editor can read doc:*),
-            # so we deny viewer/editor, allow admin or allow specific user
             AclEntry("deny", "role", "viewer", "read", "doc:secret"),
             AclEntry("deny", "role", "editor", "read", "doc:secret"),
-            AclEntry("allow", "user", "alice", "read", "doc:secret"),  # Alice gets exception
+            AclEntry("allow", "user", "alice", "read", "doc:secret"),
         ],
         "doc:*": [
-            # Example: deny everyone in viewer role from write on any doc (restrict)
             AclEntry("deny", "role", "viewer", "write", "doc:*"),
         ],
     }
 
     endpoints_by_id: Dict[str, Endpoint] = {
         "GET /docs/public": Endpoint(
-            "GET /docs/public", "GET", "/docs/public", "read", "doc:public", {"docs:read"}
+            "GET /docs/public",
+            "GET",
+            "/docs/public",
+            "read",
+            "doc:public",
+            {"docs:read"},
+            "Read public documents.",
         ),
         "POST /docs/public": Endpoint(
-            "POST /docs/public", "POST", "/docs/public", "write", "doc:public", {"docs:write"}
+            "POST /docs/public",
+            "POST",
+            "/docs/public",
+            "write",
+            "doc:public",
+            {"docs:write"},
+            "Create or update public documents.",
         ),
         "DELETE /docs/public": Endpoint(
-            "DELETE /docs/public", "DELETE", "/docs/public", "delete", "doc:public", {"docs:delete"}
+            "DELETE /docs/public",
+            "DELETE",
+            "/docs/public",
+            "delete",
+            "doc:public",
+            {"docs:delete"},
+            "Delete public documents.",
         ),
         "GET /docs/secret": Endpoint(
-            "GET /docs/secret", "GET", "/docs/secret", "read", "doc:secret", {"docs:read", "docs:secret"}
+            "GET /docs/secret",
+            "GET",
+            "/docs/secret",
+            "read",
+            "doc:secret",
+            {"docs:read", "docs:secret"},
+            "Read secret documents (extra scope required).",
         ),
     }
 
-    # Universe of scopes for UI
     all_scopes: Set[str] = {"docs:read", "docs:write", "docs:delete", "docs:secret"}
-    return users_by_id, roles_by_id, acl_by_resource, endpoints_by_id, all_scopes
+    return users_by_id, roles_by_id, acl_by_resource_pattern, endpoints_by_id, all_scopes
 
 
 # ----------------------------
-# Tkinter GUI
+# GUI
 # ----------------------------
 
-class App(tk.Tk):
-    def __init__(self) -> None:
+class MainWindow(QMainWindow):
+    def __init__(self, app: QApplication) -> None:
         super().__init__()
-        self.title("ACL + RBAC + Scopes Demo")
-        self.geometry("1100x700")
+        self._app = app
 
-        self.users_by_id, self.roles_by_id, self.acl_by_resource, self.endpoints_by_id, self.all_scopes = build_demo_data()
+        self.users_by_id, self.roles_by_id, self.acl_by_resource_pattern, self.endpoints_by_id, self.all_scopes = build_demo_data()
 
-        self.selected_user_id = tk.StringVar(value="alice")
-        self.selected_endpoint_id = tk.StringVar(value="GET /docs/public")
-
-        # Token scopes selection
-        self.scope_vars: Dict[str, tk.BooleanVar] = {}
-        for s in sorted(self.all_scopes):
-            self.scope_vars[s] = tk.BooleanVar(value=(s == "docs:read"))
-
+        self.setWindowTitle("ACL + RBAC + Scopes - Policy Simulator (PySide)")
+        self._apply_auto_font()
         self._build_ui()
-        self._refresh_roles_display()
-        self._refresh_acl_table()
+        self._load_qss()
+        self._apply_auto_window_sizing()
+        self._refresh_all()
+
+    def _apply_auto_font(self) -> None:
+        screen = self._app.primaryScreen()
+        if not screen:
+            return
+        h = max(600, screen.availableGeometry().height())
+
+        # conservative scaling for laptops (avoid oversizing)
+        if h <= 768:
+            pt = 10
+        elif h <= 900:
+            pt = 11
+        else:
+            pt = 12
+
+        f = self._app.font()
+        if isinstance(f, QFont):
+            f.setPointSize(pt)
+            self._app.setFont(f)
+
+    def _apply_auto_window_sizing(self) -> None:
+        screen = self._app.primaryScreen()
+        if not screen:
+            self.resize(1100, 720)
+            return
+
+        g = screen.availableGeometry()
+        sw, sh = g.width(), g.height()
+
+        # Fit inside available area with margin; never exceed.
+        target_w = int(sw * 0.92)
+        target_h = int(sh * 0.88)
+
+        # Guard rails for tiny displays.
+        target_w = max(900, min(target_w, sw - 20))
+        target_h = max(620, min(target_h, sh - 20))
+
+        self.resize(target_w, target_h)
+
+        x = g.x() + max(0, (sw - target_w) // 2)
+        y = g.y() + max(0, (sh - target_h) // 2)
+        self.move(x, y)
+
+        # Keep minimum size reasonable (must not push off-screen).
+        self.setMinimumSize(min(900, sw - 40), min(620, sh - 40))
+
+        # Set initial splitter sizes based on current window width.
+        total = max(900, self.width())
+        left = int(total * 0.44)
+        right = total - left
+        self.sim_splitter.setSizes([left, right])
+
+        total2 = max(900, self.width())
+        left2 = int(total2 * 0.40)
+        right2 = total2 - left2
+        self.pol_splitter.setSizes([left2, right2])
+
+    def _load_qss(self) -> None:
+        qss_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "style.qss")
+        if os.path.exists(qss_path):
+            try:
+                with open(qss_path, "r", encoding="utf-8") as f:
+                    self.setStyleSheet(f.read())
+            except Exception:
+                pass
 
     def _build_ui(self) -> None:
-        root = ttk.Frame(self, padding=10)
-        root.pack(fill=tk.BOTH, expand=True)
+        self.tabs = QTabWidget()
+        self.setCentralWidget(self.tabs)
 
-        root.columnconfigure(0, weight=1)
-        root.columnconfigure(1, weight=1)
-        root.columnconfigure(2, weight=2)
-        root.rowconfigure(0, weight=1)
+        self.tab_sim = QWidget()
+        self.tab_policies = QWidget()
+        self.tab_help = QWidget()
 
-        left = ttk.Frame(root, padding=10)
-        mid = ttk.Frame(root, padding=10)
-        right = ttk.Frame(root, padding=10)
+        self.tabs.addTab(self.tab_sim, "Simulator")
+        self.tabs.addTab(self.tab_policies, "Policies")
+        self.tabs.addTab(self.tab_help, "Explanation")
 
-        left.grid(row=0, column=0, sticky="nsew")
-        mid.grid(row=0, column=1, sticky="nsew")
-        right.grid(row=0, column=2, sticky="nsew")
+        self._build_tab_sim()
+        self._build_tab_policies()
+        self._build_tab_help()
 
-        # LEFT: User + roles + token scopes
-        ttk.Label(left, text="User").pack(anchor="w")
-        user_combo = ttk.Combobox(left, textvariable=self.selected_user_id, values=sorted(self.users_by_id.keys()), state="readonly")
-        user_combo.pack(fill=tk.X, pady=(0, 8))
-        user_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_user_changed())
+    # -------- Tab: Simulator --------
 
-        ttk.Label(left, text="User roles (RBAC)").pack(anchor="w")
-        self.roles_list = tk.Text(left, height=5, width=30)
-        self.roles_list.pack(fill=tk.X, pady=(0, 8))
-        self.roles_list.configure(state=tk.DISABLED)
+    def _build_tab_sim(self) -> None:
+        layout = QVBoxLayout()
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+        self.tab_sim.setLayout(layout)
 
-        ttk.Label(left, text="Token scopes (OAuth-style)").pack(anchor="w")
-        scopes_box = ttk.Frame(left)
-        scopes_box.pack(fill=tk.X, pady=(0, 8))
+        self.sim_splitter = QSplitter(Qt.Horizontal)
+        self.sim_splitter.setChildrenCollapsible(False)
+        layout.addWidget(self.sim_splitter)
 
-        for s in sorted(self.all_scopes):
-            cb = ttk.Checkbutton(scopes_box, text=s, variable=self.scope_vars[s])
-            cb.pack(anchor="w")
+        # LEFT: selection
+        left = QWidget()
+        left_layout = QVBoxLayout()
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(10)
+        left.setLayout(left_layout)
 
-        ttk.Separator(left).pack(fill=tk.X, pady=8)
+        gb_scn = QGroupBox("Quick scenarios")
+        h = QHBoxLayout()
+        h.setSpacing(8)
+        gb_scn.setLayout(h)
 
-        ttk.Label(left, text="RBAC role assignment").pack(anchor="w")
-        assign_frame = ttk.Frame(left)
-        assign_frame.pack(fill=tk.X, pady=(0, 6))
+        self.scenario_combo = QComboBox()
+        self.scenario_combo.addItems([
+            "(choose)",
+            "alice reads public (allow)",
+            "alice reads secret (allow via ACL exception)",
+            "bob deletes public (deny via ACL deny)",
+            "carol writes public (deny via missing scope unless selected)",
+            "dave reads secret (allow: admin + scopes)",
+            "missing scopes example (deny in step 1)",
+        ])
+        h.addWidget(self.scenario_combo, 1)
 
-        self.role_to_assign = tk.StringVar(value="viewer")
-        role_combo = ttk.Combobox(assign_frame, textvariable=self.role_to_assign, values=sorted(self.roles_by_id.keys()), state="readonly")
-        role_combo.grid(row=0, column=0, sticky="ew")
-        assign_frame.columnconfigure(0, weight=1)
+        self.btn_load_scn = QPushButton("Load")
+        self.btn_load_scn.clicked.connect(self._load_scenario)
+        h.addWidget(self.btn_load_scn)
 
-        ttk.Button(assign_frame, text="Add role", command=self._add_role_to_user).grid(row=0, column=1, padx=6)
-        ttk.Button(assign_frame, text="Remove role", command=self._remove_role_from_user).grid(row=0, column=2)
+        left_layout.addWidget(gb_scn)
 
-        # MID: Endpoint selection + ACL editor + ACL table
-        ttk.Label(mid, text="Endpoint").pack(anchor="w")
-        ep_combo = ttk.Combobox(mid, textvariable=self.selected_endpoint_id, values=sorted(self.endpoints_by_id.keys()), state="readonly")
-        ep_combo.pack(fill=tk.X, pady=(0, 8))
+        gb_req = QGroupBox("1) Request preset (Endpoint)")
+        v = QVBoxLayout()
+        v.setSpacing(8)
+        gb_req.setLayout(v)
 
-        ttk.Label(mid, text="Endpoint details").pack(anchor="w")
-        self.endpoint_details = tk.Text(mid, height=6, width=40)
-        self.endpoint_details.pack(fill=tk.BOTH, expand=False, pady=(0, 8))
-        self.endpoint_details.configure(state=tk.DISABLED)
-        ep_combo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_endpoint_details())
+        self.endpoint_combo = QComboBox()
+        self.endpoint_combo.addItems(sorted(self.endpoints_by_id.keys()))
+        self.endpoint_combo.currentTextChanged.connect(lambda _t: self._refresh_all())
+        v.addWidget(self.endpoint_combo)
+
+        self.endpoint_tabs = QTabWidget()
+
+        self.endpoint_details = QTextEdit()
+        self.endpoint_details.setReadOnly(True)
+        self.endpoint_details.setMinimumHeight(140)
+
+        self.mapping_box = QTextEdit()
+        self.mapping_box.setReadOnly(True)
+        self.mapping_box.setMinimumHeight(140)
+
+        self.endpoint_tabs.addTab(self.endpoint_details, "Details")
+        self.endpoint_tabs.addTab(self.mapping_box, "Mapping")
+        v.addWidget(self.endpoint_tabs)
+
+        left_layout.addWidget(gb_req)
+
+        gb_user = QGroupBox("2) User and roles (RBAC)")
+        v = QVBoxLayout()
+        v.setSpacing(8)
+        gb_user.setLayout(v)
+
+        self.user_combo = QComboBox()
+        self.user_combo.addItems(sorted(self.users_by_id.keys()))
+        self.user_combo.currentTextChanged.connect(lambda _t: self._refresh_all())
+        v.addWidget(self.user_combo)
+
+        self.user_roles_list = QListWidget()
+        self.user_roles_list.setMinimumHeight(90)
+        v.addWidget(self.user_roles_list)
+
+        role_row = QHBoxLayout()
+        role_row.setSpacing(8)
+        self.role_pick = QComboBox()
+        self.role_pick.addItems(sorted(self.roles_by_id.keys()))
+        role_row.addWidget(self.role_pick, 1)
+
+        self.btn_add_role = QPushButton("Add role")
+        self.btn_add_role.clicked.connect(self._add_role_to_user)
+        role_row.addWidget(self.btn_add_role)
+
+        self.btn_remove_role = QPushButton("Remove role")
+        self.btn_remove_role.clicked.connect(self._remove_role_from_user)
+        role_row.addWidget(self.btn_remove_role)
+
+        v.addLayout(role_row)
+        left_layout.addWidget(gb_user)
+
+        gb_scopes = QGroupBox("3) Token scopes (OAuth style)")
+        v = QVBoxLayout()
+        v.setSpacing(8)
+        gb_scopes.setLayout(v)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(8)
+        self.btn_select_required = QPushButton("Select required")
+        self.btn_select_required.clicked.connect(self._select_required_scopes)
+        btns.addWidget(self.btn_select_required)
+
+        self.btn_clear_scopes = QPushButton("Clear")
+        self.btn_clear_scopes.clicked.connect(self._clear_scopes)
+        btns.addWidget(self.btn_clear_scopes)
+
+        self.btn_select_all = QPushButton("Select all")
+        self.btn_select_all.clicked.connect(self._select_all_scopes)
+        btns.addWidget(self.btn_select_all)
+
+        btns.addStretch(1)
+        v.addLayout(btns)
+
+        self.scopes_list = QListWidget()
+        self.scopes_list.setMinimumHeight(170)
+        v.addWidget(self.scopes_list, 1)
+
+        left_layout.addWidget(gb_scopes, 1)
+
+        self.sim_splitter.addWidget(left)
+
+        # RIGHT: results
+        right = QWidget()
+        right_layout = QVBoxLayout()
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10)
+        right.setLayout(right_layout)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+
+        self.btn_eval = QPushButton("Evaluate")
+        self.btn_eval.clicked.connect(self._evaluate)
+        top_row.addWidget(self.btn_eval)
+
+        self.btn_fit = QPushButton("Fit window")
+        self.btn_fit.clicked.connect(self._apply_auto_window_sizing)
+        top_row.addWidget(self.btn_fit)
+
+        self.btn_clear_out = QPushButton("Clear output")
+        self.btn_clear_out.clicked.connect(self._clear_output)
+        top_row.addWidget(self.btn_clear_out)
+
+        self.btn_copy_out = QPushButton("Copy output")
+        self.btn_copy_out.clicked.connect(self._copy_output)
+        top_row.addWidget(self.btn_copy_out)
+
+        top_row.addStretch(1)
+        right_layout.addLayout(top_row)
+
+        self.decision_label = QLabel("Decision: (not evaluated)")
+        self.decision_label.setObjectName("DecisionLabel")
+        self.decision_label.setProperty("decision", "none")
+        self.decision_label.setAlignment(Qt.AlignCenter)
+        self.decision_label.setMinimumHeight(50)
+        right_layout.addWidget(self.decision_label)
+
+        gb_steps = QGroupBox("Decision steps (Scopes -> RBAC -> ACL -> Final)")
+        v = QVBoxLayout()
+        v.setSpacing(8)
+        gb_steps.setLayout(v)
+
+        self.steps_tree = QTreeWidget()
+        self.steps_tree.setHeaderLabels(["Step", "Status"])
+        self.steps_tree.setColumnWidth(0, 620)
+        v.addWidget(self.steps_tree)
+
+        right_layout.addWidget(gb_steps, 1)
+
+        gb_out = QGroupBox("Readable output")
+        v = QVBoxLayout()
+        v.setSpacing(8)
+        gb_out.setLayout(v)
+
+        self.output = QPlainTextEdit()
+        self.output.setReadOnly(True)
+        self.output.setMinimumHeight(170)
+        v.addWidget(self.output)
+
+        right_layout.addWidget(gb_out)
+
+        self.sim_splitter.addWidget(right)
+        self.sim_splitter.setStretchFactor(0, 2)
+        self.sim_splitter.setStretchFactor(1, 3)
+
+    # -------- Tab: Policies --------
+
+    def _build_tab_policies(self) -> None:
+        layout = QVBoxLayout()
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+        self.tab_policies.setLayout(layout)
+
+        self.pol_splitter = QSplitter(Qt.Horizontal)
+        self.pol_splitter.setChildrenCollapsible(False)
+        layout.addWidget(self.pol_splitter)
+
+        left = QWidget()
+        left_layout = QVBoxLayout()
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(10)
+        left.setLayout(left_layout)
+
+        gb_roles = QGroupBox("RBAC roles and permissions")
+        v = QVBoxLayout()
+        v.setSpacing(8)
+        gb_roles.setLayout(v)
+
+        self.roles_table = QTableWidget(0, 2)
+        self.roles_table.setHorizontalHeaderLabels(["role", "permissions (action, resource)"])
+        self.roles_table.verticalHeader().setVisible(False)
+        self.roles_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.roles_table.setSelectionBehavior(QTableWidget.SelectRows)
+        v.addWidget(self.roles_table)
+
+        left_layout.addWidget(gb_roles, 1)
+
+        right = QWidget()
+        right_layout = QVBoxLayout()
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10)
+        right.setLayout(right_layout)
+
+        gb_acl_edit = QGroupBox("ACL editor (allow/deny exceptions)")
+        form = QFormLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(8)
+        gb_acl_edit.setLayout(form)
+
+        self.acl_effect = QComboBox()
+        self.acl_effect.addItems(["deny", "allow"])
+        form.addRow("effect", self.acl_effect)
+
+        self.acl_subject_type = QComboBox()
+        self.acl_subject_type.addItems(["role", "user"])
+        self.acl_subject_type.currentTextChanged.connect(lambda _t: self._refresh_acl_subject_ids())
+        form.addRow("subject_type", self.acl_subject_type)
+
+        self.acl_subject_id = QComboBox()
+        form.addRow("subject_id", self.acl_subject_id)
+
+        self.acl_action = QComboBox()
+        self.acl_action.addItems(["read", "write", "delete", "*"])
+        form.addRow("action", self.acl_action)
+
+        self.acl_resource = QLineEdit("doc:secret")
+        self.acl_resource.setToolTip("Pattern examples: doc:public, doc:secret, doc:* , *")
+        form.addRow("resource_pattern", self.acl_resource)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        self.btn_add_acl = QPushButton("Add ACL entry")
+        self.btn_add_acl.clicked.connect(self._add_acl_entry)
+        btn_row.addWidget(self.btn_add_acl)
+
+        self.btn_remove_acl = QPushButton("Remove selected")
+        self.btn_remove_acl.clicked.connect(self._remove_selected_acl_entry)
+        btn_row.addWidget(self.btn_remove_acl)
+
+        btn_row.addStretch(1)
+        form.addRow(btn_row)
+
+        right_layout.addWidget(gb_acl_edit)
+
+        gb_acl_table = QGroupBox("ACL entries")
+        v = QVBoxLayout()
+        v.setSpacing(8)
+        gb_acl_table.setLayout(v)
+
+        self.acl_table = QTableWidget(0, 5)
+        self.acl_table.setHorizontalHeaderLabels(["pattern_key", "effect", "subject", "action", "resource"])
+        self.acl_table.verticalHeader().setVisible(False)
+        self.acl_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.acl_table.setSelectionBehavior(QTableWidget.SelectRows)
+        v.addWidget(self.acl_table)
+
+        right_layout.addWidget(gb_acl_table, 1)
+
+        hint = QLabel("Rule: ACL deny overrides everything. If no ACL matches, RBAC decides.")
+        hint.setObjectName("HintLabel")
+        right_layout.addWidget(hint)
+
+        self.pol_splitter.addWidget(left)
+        self.pol_splitter.addWidget(right)
+        self.pol_splitter.setStretchFactor(0, 2)
+        self.pol_splitter.setStretchFactor(1, 3)
+
+    # -------- Tab: Help --------
+
+    def _build_tab_help(self) -> None:
+        layout = QVBoxLayout()
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+        self.tab_help.setLayout(layout)
+
+        gb = QGroupBox("How to think about it (short)")
+        v = QVBoxLayout()
+        v.setSpacing(8)
+        gb.setLayout(v)
+
+        txt = QPlainTextEdit()
+        txt.setReadOnly(True)
+        txt.setPlainText(
+            "Endpoint:\n"
+            "- In real APIs: method + path, e.g. GET /docs/public\n"
+            "- In this demo: each endpoint also defines action/resource and required_scopes.\n"
+            "\n"
+            "Scopes:\n"
+            "- Token-level permissions (OAuth style). Missing required scope => immediate DENY.\n"
+            "\n"
+            "RBAC:\n"
+            "- User has roles. Roles have permissions (action, resource).\n"
+            "- If any role matches => RBAC OK.\n"
+            "\n"
+            "ACL:\n"
+            "- Object-level exceptions on resources (or patterns like doc:*).\n"
+            "- deny overrides everything; allow can grant access.\n"
+            "\n"
+            "Typical combined usage:\n"
+            "- Scopes: coarse gate\n"
+            "- RBAC: default rights\n"
+            "- ACL: fine-grained exceptions\n"
+        )
+        v.addWidget(txt)
+        layout.addWidget(gb)
+
+    # ----------------------------
+    # Refresh
+    # ----------------------------
+
+    def _current_user(self) -> User:
+        return self.users_by_id[self.user_combo.currentText()]
+
+    def _current_endpoint(self) -> Endpoint:
+        return self.endpoints_by_id[self.endpoint_combo.currentText()]
+
+    def _token_scopes(self) -> Set[str]:
+        scopes: Set[str] = set()
+        for i in range(self.scopes_list.count()):
+            it = self.scopes_list.item(i)
+            if it.checkState() == Qt.Checked:
+                scopes.add(it.text())
+        return scopes
+
+    def _refresh_all(self) -> None:
         self._refresh_endpoint_details()
-
-        ttk.Separator(mid).pack(fill=tk.X, pady=8)
-
-        ttk.Label(mid, text="Add ACL entry (per resource pattern)").pack(anchor="w")
-        acl_form = ttk.Frame(mid)
-        acl_form.pack(fill=tk.X, pady=(0, 8))
-
-        self.acl_effect = tk.StringVar(value="deny")
-        self.acl_subject_type = tk.StringVar(value="role")
-        self.acl_subject_id = tk.StringVar(value="viewer")
-        self.acl_action = tk.StringVar(value="read")
-        self.acl_resource = tk.StringVar(value="doc:secret")  # can be "doc:*"
-
-        row0 = ttk.Frame(acl_form)
-        row0.pack(fill=tk.X, pady=2)
-        ttk.Label(row0, text="effect").grid(row=0, column=0, sticky="w")
-        ttk.Combobox(row0, textvariable=self.acl_effect, values=["allow", "deny"], state="readonly", width=10).grid(row=0, column=1, padx=6)
-        ttk.Label(row0, text="subject_type").grid(row=0, column=2, sticky="w")
-        ttk.Combobox(row0, textvariable=self.acl_subject_type, values=["user", "role"], state="readonly", width=10).grid(row=0, column=3, padx=6)
-
-        row1 = ttk.Frame(acl_form)
-        row1.pack(fill=tk.X, pady=2)
-        ttk.Label(row1, text="subject_id").grid(row=0, column=0, sticky="w")
-        self.subject_id_combo = ttk.Combobox(row1, textvariable=self.acl_subject_id, values=sorted(self.roles_by_id.keys()), state="readonly")
-        self.subject_id_combo.grid(row=0, column=1, padx=6, sticky="ew")
-        row1.columnconfigure(1, weight=1)
-        self.acl_subject_type.trace_add("write", lambda *_a: self._refresh_subject_id_combo())
-
-        row2 = ttk.Frame(acl_form)
-        row2.pack(fill=tk.X, pady=2)
-        ttk.Label(row2, text="action").grid(row=0, column=0, sticky="w")
-        ttk.Entry(row2, textvariable=self.acl_action, width=14).grid(row=0, column=1, padx=6, sticky="w")
-        ttk.Label(row2, text="resource_pattern").grid(row=0, column=2, sticky="w")
-        ttk.Entry(row2, textvariable=self.acl_resource, width=16).grid(row=0, column=3, padx=6, sticky="w")
-
-        row3 = ttk.Frame(acl_form)
-        row3.pack(fill=tk.X, pady=2)
-        ttk.Button(row3, text="Add ACL entry", command=self._add_acl_entry).pack(side=tk.LEFT)
-        ttk.Button(row3, text="Remove selected ACL entry", command=self._remove_selected_acl_entry).pack(side=tk.LEFT, padx=6)
-
-        ttk.Label(mid, text="ACL entries (deny overrides allow)").pack(anchor="w")
-        self.acl_tree = ttk.Treeview(mid, columns=("key", "effect", "subject", "action", "resource"), show="headings", height=10)
-        for col, w in [("key", 120), ("effect", 60), ("subject", 160), ("action", 80), ("resource", 160)]:
-            self.acl_tree.heading(col, text=col)
-            self.acl_tree.column(col, width=w, anchor="w")
-        self.acl_tree.pack(fill=tk.BOTH, expand=True)
-
-        # RIGHT: Evaluate + output
-        actions = ttk.Frame(right)
-        actions.pack(fill=tk.X)
-
-        ttk.Button(actions, text="Evaluate", command=self._evaluate).pack(side=tk.LEFT)
-        ttk.Button(actions, text="Reset demo data", command=self._reset_data).pack(side=tk.LEFT, padx=6)
-        ttk.Button(actions, text="Clear output", command=self._clear_output).pack(side=tk.LEFT)
-
-        ttk.Label(right, text="Decision output").pack(anchor="w", pady=(10, 0))
-        self.output = tk.Text(right, wrap="word")
-        self.output.pack(fill=tk.BOTH, expand=True)
-        self._write_output("Ready.\n")
-
-    def _write_output(self, text: str) -> None:
-        self.output.insert(tk.END, text)
-        self.output.see(tk.END)
-
-    def _clear_output(self) -> None:
-        self.output.delete("1.0", tk.END)
-
-    def _on_user_changed(self) -> None:
-        self._refresh_roles_display()
-
-    def _refresh_roles_display(self) -> None:
-        user = self.users_by_id[self.selected_user_id.get()]
-        lines = []
-        for rid in sorted(user.roles):
-            role = self.roles_by_id.get(rid)
-            if role:
-                perms = "; ".join([f"({p.action},{p.resource})" for p in role.permissions]) or "(no perms)"
-                lines.append(f"- {rid}: {perms}")
-            else:
-                lines.append(f"- {rid}: (missing role)")
-        if not lines:
-            lines = ["(no roles)"]
-
-        self.roles_list.configure(state=tk.NORMAL)
-        self.roles_list.delete("1.0", tk.END)
-        self.roles_list.insert(tk.END, "\n".join(lines))
-        self.roles_list.configure(state=tk.DISABLED)
-
-    def _refresh_subject_id_combo(self) -> None:
-        st = self.acl_subject_type.get()
-        if st == "user":
-            self.subject_id_combo.configure(values=sorted(self.users_by_id.keys()))
-            if self.acl_subject_id.get() not in self.users_by_id:
-                self.acl_subject_id.set(sorted(self.users_by_id.keys())[0])
-        else:
-            self.subject_id_combo.configure(values=sorted(self.roles_by_id.keys()))
-            if self.acl_subject_id.get() not in self.roles_by_id:
-                self.acl_subject_id.set(sorted(self.roles_by_id.keys())[0])
+        self._refresh_mapping_box()
+        self._refresh_user_roles()
+        self._refresh_scopes_list()
+        self._refresh_roles_table()
+        self._refresh_acl_subject_ids()
+        self._refresh_acl_table()
 
     def _refresh_endpoint_details(self) -> None:
-        ep = self.endpoints_by_id[self.selected_endpoint_id.get()]
-        detail = [
-            f"endpoint_id: {ep.endpoint_id}",
-            f"method:      {ep.method}",
-            f"path:        {ep.path}",
-            f"action:      {ep.action}",
-            f"resource:    {ep.resource}",
-            "required_scopes: " + (", ".join(sorted(ep.required_scopes)) if ep.required_scopes else "(none)"),
-        ]
-        self.endpoint_details.configure(state=tk.NORMAL)
-        self.endpoint_details.delete("1.0", tk.END)
-        self.endpoint_details.insert(tk.END, "\n".join(detail))
-        self.endpoint_details.configure(state=tk.DISABLED)
+        ep = self._current_endpoint()
+        text = (
+            f"Endpoint: {ep.endpoint_id}\n"
+            f"Description: {ep.description}\n\n"
+            f"method: {ep.method}\n"
+            f"path:   {ep.path}\n\n"
+            f"action:   {ep.action}\n"
+            f"resource: {ep.resource}\n"
+            f"required_scopes: {', '.join(sorted(ep.required_scopes)) if ep.required_scopes else '(none)'}\n"
+        )
+        self.endpoint_details.setPlainText(text)
+
+    def _refresh_mapping_box(self) -> None:
+        ep = self._current_endpoint()
+        text = (
+            "Request (packaging):\n"
+            f"- method + path: {ep.method} {ep.path}\n\n"
+            "Policy inputs (stable concepts):\n"
+            f"- action:   {ep.action}\n"
+            f"- resource: {ep.resource}\n\n"
+            "Scopes (token rights):\n"
+            f"- required_scopes: {', '.join(sorted(ep.required_scopes)) if ep.required_scopes else '(none)'}\n\n"
+            "Reason:\n"
+            "- URLs change; policies should not hardcode URLs.\n"
+            "- action/resource/scopes are reusable across APIs.\n"
+        )
+        self.mapping_box.setPlainText(text)
+
+    def _refresh_user_roles(self) -> None:
+        self.user_roles_list.clear()
+        user = self._current_user()
+        for rid in sorted(user.roles):
+            self.user_roles_list.addItem(rid)
+
+    def _refresh_scopes_list(self) -> None:
+        prev = self._token_scopes()
+        self.scopes_list.clear()
+
+        ep = self._current_endpoint()
+        required = set(ep.required_scopes)
+
+        for s in sorted(self.all_scopes):
+            it = QListWidgetItem(s)
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Checked if s in prev else Qt.Unchecked)
+
+            font = it.font()
+            font.setBold(s in required)
+            it.setFont(font)
+
+            if s in required:
+                it.setToolTip("Required by selected endpoint.")
+            else:
+                it.setToolTip("Optional for this endpoint.")
+
+            self.scopes_list.addItem(it)
+
+    def _refresh_roles_table(self) -> None:
+        rows = sorted(self.roles_by_id.keys())
+        self.roles_table.setRowCount(len(rows))
+        self.roles_table.setColumnCount(2)
+
+        for r, rid in enumerate(rows):
+            role = self.roles_by_id[rid]
+            perms = "; ".join([f"({p.action},{p.resource})" for p in role.permissions]) if role.permissions else "(none)"
+            self.roles_table.setItem(r, 0, QTableWidgetItem(rid))
+            self.roles_table.setItem(r, 1, QTableWidgetItem(perms))
+
+        self.roles_table.resizeColumnsToContents()
+
+    def _refresh_acl_subject_ids(self) -> None:
+        st = self.acl_subject_type.currentText()
+        self.acl_subject_id.clear()
+        if st == "user":
+            self.acl_subject_id.addItems(sorted(self.users_by_id.keys()))
+        else:
+            self.acl_subject_id.addItems(sorted(self.roles_by_id.keys()))
+
+    def _refresh_acl_table(self) -> None:
+        rows: List[Tuple[str, str, str, str, str]] = []
+        for pattern_key in sorted(self.acl_by_resource_pattern.keys()):
+            for e in self.acl_by_resource_pattern[pattern_key]:
+                rows.append((pattern_key, e.effect, f"{e.subject_type}:{e.subject_id}", e.action, e.resource))
+
+        self.acl_table.setRowCount(len(rows))
+        self.acl_table.setColumnCount(5)
+
+        for r, row in enumerate(rows):
+            for c, val in enumerate(row):
+                self.acl_table.setItem(r, c, QTableWidgetItem(val))
+
+        self.acl_table.resizeColumnsToContents()
+
+    # ----------------------------
+    # Actions
+    # ----------------------------
 
     def _add_role_to_user(self) -> None:
-        uid = self.selected_user_id.get()
-        rid = self.role_to_assign.get()
-        if rid in self.roles_by_id:
-            self.users_by_id[uid].roles.add(rid)
-            self._refresh_roles_display()
+        user = self._current_user()
+        rid = self.role_pick.currentText()
+        user.roles.add(rid)
+        self._refresh_user_roles()
 
     def _remove_role_from_user(self) -> None:
-        uid = self.selected_user_id.get()
-        rid = self.role_to_assign.get()
-        if rid in self.users_by_id[uid].roles:
-            self.users_by_id[uid].roles.remove(rid)
-            self._refresh_roles_display()
+        user = self._current_user()
+        rid = self.role_pick.currentText()
+        if rid in user.roles:
+            user.roles.remove(rid)
+        self._refresh_user_roles()
+
+    def _select_required_scopes(self) -> None:
+        ep = self._current_endpoint()
+        required = set(ep.required_scopes)
+        for i in range(self.scopes_list.count()):
+            it = self.scopes_list.item(i)
+            it.setCheckState(Qt.Checked if it.text() in required else Qt.Unchecked)
+
+    def _clear_scopes(self) -> None:
+        for i in range(self.scopes_list.count()):
+            self.scopes_list.item(i).setCheckState(Qt.Unchecked)
+
+    def _select_all_scopes(self) -> None:
+        for i in range(self.scopes_list.count()):
+            self.scopes_list.item(i).setCheckState(Qt.Checked)
 
     def _add_acl_entry(self) -> None:
-        effect = self.acl_effect.get().strip()
-        st = self.acl_subject_type.get().strip()
-        sid = self.acl_subject_id.get().strip()
-        action = self.acl_action.get().strip()
-        res = self.acl_resource.get().strip()
+        effect = self.acl_effect.currentText().strip()
+        st = self.acl_subject_type.currentText().strip()
+        sid = self.acl_subject_id.currentText().strip()
+        action = self.acl_action.currentText().strip()
+        res = self.acl_resource.text().strip()
 
         if effect not in ("allow", "deny"):
-            self._write_output("Invalid ACL effect (use allow/deny).\n")
+            QMessageBox.warning(self, "ACL", "effect must be allow or deny")
             return
         if st not in ("user", "role"):
-            self._write_output("Invalid subject_type (use user/role).\n")
+            QMessageBox.warning(self, "ACL", "subject_type must be user or role")
             return
         if not sid or not action or not res:
-            self._write_output("ACL fields must be non-empty.\n")
+            QMessageBox.warning(self, "ACL", "all fields must be non-empty")
             return
         if st == "user" and sid not in self.users_by_id:
-            self._write_output("Unknown user_id for ACL.\n")
+            QMessageBox.warning(self, "ACL", "unknown user_id")
             return
         if st == "role" and sid not in self.roles_by_id:
-            self._write_output("Unknown role_id for ACL.\n")
+            QMessageBox.warning(self, "ACL", "unknown role_id")
             return
 
         entry = AclEntry(effect, st, sid, action, res)
-
-        # Store under key = res (pattern key). We treat keys as patterns in evaluation.
-        self.acl_by_resource.setdefault(res, []).append(entry)
+        self.acl_by_resource_pattern.setdefault(res, []).append(entry)
         self._refresh_acl_table()
 
     def _remove_selected_acl_entry(self) -> None:
-        sel = self.acl_tree.selection()
-        if not sel:
+        row = self.acl_table.currentRow()
+        if row < 0:
             return
-        item_id = sel[0]
-        vals = self.acl_tree.item(item_id, "values")
-        if len(vals) != 5:
-            return
-        key, effect, subject, action, resource = vals
-        # subject is "type:id"
+
+        pattern_key = self.acl_table.item(row, 0).text()
+        effect = self.acl_table.item(row, 1).text()
+        subject = self.acl_table.item(row, 2).text()
+        action = self.acl_table.item(row, 3).text()
+        resource = self.acl_table.item(row, 4).text()
+
         if ":" not in subject:
             return
         st, sid = subject.split(":", 1)
-        st = st.strip()
-        sid = sid.strip()
 
-        entries = self.acl_by_resource.get(key, [])
+        entries = self.acl_by_resource_pattern.get(pattern_key, [])
         new_entries: List[AclEntry] = []
         removed = False
+
         for e in entries:
             if (not removed and e.effect == effect and e.subject_type == st and e.subject_id == sid and e.action == action and e.resource == resource):
                 removed = True
                 continue
             new_entries.append(e)
+
         if removed:
             if new_entries:
-                self.acl_by_resource[key] = new_entries
+                self.acl_by_resource_pattern[pattern_key] = new_entries
             else:
-                del self.acl_by_resource[key]
+                del self.acl_by_resource_pattern[pattern_key]
             self._refresh_acl_table()
 
-    def _refresh_acl_table(self) -> None:
-        for iid in self.acl_tree.get_children():
-            self.acl_tree.delete(iid)
-
-        rows: List[Tuple[str, str, str, str, str]] = []
-        for key in sorted(self.acl_by_resource.keys()):
-            for e in self.acl_by_resource[key]:
-                rows.append((key, e.effect, f"{e.subject_type}:{e.subject_id}", e.action, e.resource))
-
-        for r in rows:
-            self.acl_tree.insert("", tk.END, values=r)
-
-    def _current_token_scopes(self) -> Set[str]:
-        scopes: Set[str] = set()
-        for s, v in self.scope_vars.items():
-            if v.get():
-                scopes.add(s)
-        return scopes
-
     def _evaluate(self) -> None:
-        uid = self.selected_user_id.get()
-        ep_id = self.selected_endpoint_id.get()
-        user = self.users_by_id[uid]
-        endpoint = self.endpoints_by_id[ep_id]
-        token_scopes = self._current_token_scopes()
+        user = self._current_user()
+        ep = self._current_endpoint()
+        scopes = self._token_scopes()
 
-        allowed, reasons = evaluate_access(
+        allowed, steps = evaluate_access(
             user=user,
             roles_by_id=self.roles_by_id,
-            acl_by_resource=self.acl_by_resource,
-            endpoint=endpoint,
-            token_scopes=token_scopes,
+            acl_by_resource_pattern=self.acl_by_resource_pattern,
+            endpoint=ep,
+            token_scopes=scopes,
         )
 
-        self._write_output("\n---\n")
-        self._write_output(f"User: {uid}\n")
-        self._write_output("Roles: " + (", ".join(sorted(user.roles)) if user.roles else "(none)") + "\n")
-        self._write_output(f"Endpoint: {endpoint.endpoint_id} ({endpoint.action} {endpoint.resource})\n")
-        self._write_output("Token scopes: " + (", ".join(sorted(token_scopes)) if token_scopes else "(none)") + "\n")
-        self._write_output("Decision: " + ("ALLOW" if allowed else "DENY") + "\n")
-        self._write_output("Reasons:\n")
-        for r in reasons:
-            self._write_output(" - " + r + "\n")
+        self.steps_tree.clear()
+        for title, status, lines in steps:
+            top = QTreeWidgetItem([title, status])
+            self.steps_tree.addTopLevelItem(top)
+            for ln in lines:
+                child = QTreeWidgetItem([ln, ""])
+                top.addChild(child)
+            top.setExpanded(True)
 
-    def _reset_data(self) -> None:
-        self.users_by_id, self.roles_by_id, self.acl_by_resource, self.endpoints_by_id, self.all_scopes = build_demo_data()
+        if allowed:
+            self.decision_label.setText("Decision: ALLOW")
+            self.decision_label.setProperty("decision", "allow")
+        else:
+            self.decision_label.setText("Decision: DENY")
+            self.decision_label.setProperty("decision", "deny")
 
-        # refresh scope vars to include all scopes again
-        existing = set(self.scope_vars.keys())
-        for s in sorted(self.all_scopes):
-            if s not in existing:
-                self.scope_vars[s] = tk.BooleanVar(value=False)
+        self.decision_label.style().unpolish(self.decision_label)
+        self.decision_label.style().polish(self.decision_label)
 
-        # default scopes
-        for s, v in self.scope_vars.items():
-            v.set(s == "docs:read")
+        out: List[str] = []
+        out.append("=" * 76)
+        out.append(f"Request:  {ep.method} {ep.path}")
+        out.append(f"Mapping:  action={ep.action}, resource={ep.resource}")
+        out.append("User:     " + user.user_id + " roles=[" + (", ".join(sorted(user.roles)) if user.roles else "(none)") + "]")
+        out.append("Token scopes: " + (", ".join(sorted(scopes)) if scopes else "(none)"))
+        out.append("Required:    " + (", ".join(sorted(ep.required_scopes)) if ep.required_scopes else "(none)"))
+        out.append("Decision: " + ("ALLOW" if allowed else "DENY"))
+        out.append("-" * 76)
+        for title, status, lines in steps:
+            out.append(f"{title} -> {status}")
+            for ln in lines:
+                out.append("  - " + ln)
+        out.append("")
+        self.output.appendPlainText("\n".join(out))
 
-        # refresh combos
-        self.selected_user_id.set("alice")
-        self.selected_endpoint_id.set("GET /docs/public")
-        self.role_to_assign.set("viewer")
-        self.acl_subject_type.set("role")
-        self.acl_subject_id.set("viewer")
-        self.acl_effect.set("deny")
-        self.acl_action.set("read")
-        self.acl_resource.set("doc:secret")
+    def _clear_output(self) -> None:
+        self.output.clear()
+        self.decision_label.setText("Decision: (not evaluated)")
+        self.decision_label.setProperty("decision", "none")
+        self.decision_label.style().unpolish(self.decision_label)
+        self.decision_label.style().polish(self.decision_label)
+        self.steps_tree.clear()
 
-        self._refresh_subject_id_combo()
-        self._refresh_roles_display()
-        self._refresh_endpoint_details()
-        self._refresh_acl_table()
-        self._write_output("\n---\nReset demo data.\n")
+    def _copy_output(self) -> None:
+        QApplication.clipboard().setText(self.output.toPlainText())
+
+    def _set_scopes(self, scopes: Set[str]) -> None:
+        for i in range(self.scopes_list.count()):
+            it = self.scopes_list.item(i)
+            it.setCheckState(Qt.Checked if it.text() in scopes else Qt.Unchecked)
+
+    def _load_scenario(self) -> None:
+        name = self.scenario_combo.currentText()
+
+        def set_user(uid: str) -> None:
+            idx = self.user_combo.findText(uid)
+            if idx >= 0:
+                self.user_combo.setCurrentIndex(idx)
+
+        def set_ep(eid: str) -> None:
+            idx = self.endpoint_combo.findText(eid)
+            if idx >= 0:
+                self.endpoint_combo.setCurrentIndex(idx)
+
+        if name == "alice reads public (allow)":
+            set_user("alice")
+            set_ep("GET /docs/public")
+            self._refresh_all()
+            self._set_scopes({"docs:read"})
+        elif name == "alice reads secret (allow via ACL exception)":
+            set_user("alice")
+            set_ep("GET /docs/secret")
+            self._refresh_all()
+            self._set_scopes({"docs:read", "docs:secret"})
+        elif name == "bob deletes public (deny via ACL deny)":
+            set_user("bob")
+            set_ep("DELETE /docs/public")
+            self._refresh_all()
+            self._set_scopes({"docs:delete"})
+        elif name == "carol writes public (deny via missing scope unless selected)":
+            set_user("carol")
+            set_ep("POST /docs/public")
+            self._refresh_all()
+            self._set_scopes(set())
+        elif name == "dave reads secret (allow: admin + scopes)":
+            set_user("dave")
+            set_ep("GET /docs/secret")
+            self._refresh_all()
+            self._set_scopes({"docs:read", "docs:secret"})
+        elif name == "missing scopes example (deny in step 1)":
+            set_user("dave")
+            set_ep("GET /docs/secret")
+            self._refresh_all()
+            self._set_scopes({"docs:read"})
+        else:
+            return
 
 
 def main() -> None:
-    app = App()
-    app.mainloop()
+    app = QApplication(sys.argv)
+    w = MainWindow(app)
+    w.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":
